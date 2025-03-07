@@ -136,5 +136,5 @@ Feel free to fork this project, enhance the model, or add new features. Submit p
 
 ## **License**
 
-This project is open-source and available under the [MIT License](https://opensource.org/licenses/MIT) (or specify your preferred license).
+This project is open-source and available under the [MIT License](https://opensource.org/licenses/MIT).
 
