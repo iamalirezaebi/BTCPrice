@@ -1,81 +1,86 @@
 # Can Technical Indicators Predict Crypto Price Direction?
 
-An exploratory study of Bitcoin (BTC-USD) and Ethereum (ETH-USD) price data. I tested whether price-derived signals (moving averages, RSI, MACD, Bollinger Bands) carry enough information to predict the direction of the next period. I then started extending the work with social-media sentiment.
+An exploratory study of Bitcoin (BTC-USD) and Ethereum (ETH-USD) price data. I tested whether price-derived signals (moving averages, RSI, MACD, Bollinger Bands and ~80 other indicators) carry enough information to predict the direction of the next candle. I then started extending the work with social-media sentiment.
 
-**Short answer so far: not in any way I could demonstrate.** Models trained on price-based features fit the history well, but none of the experiments showed predictive power that would hold on unseen data. The main lesson of this project is about *evaluation*, not prediction.
+**Short answer: no.** A Random Forest scores 100% on its own training data but only **46–52% on unseen data**, below a naive "always predict up" baseline for both coins on both monthly and weekly candles. The main lesson of this project is about *evaluation*, not prediction.
+
+![Walk-forward results](BTC/walk_forward_results.png)
 
 ---
 
 ## Question
 
-> Given only historical price and volume data, can a model predict whether the next month's (or next days') closing price will be higher or lower than today's?
+> Given only historical price and volume data, can a model predict whether the next candle's close will be higher or lower than the current one?
 
-## Experiments
+## Main result: Random Forest with walk-forward validation
 
-| Notebook | Approach | Data | Status |
-|---|---|---|---|
-| `BTC/mlprediction on btc_usd_chart.ipynb` | Rule-based: 20/50-day SMA crossover, projected 60 days ahead | Bitstamp BTC/USD daily (CSV) | Complete |
-| `BTC/indicatorbasedprediction.ipynb` | Random Forest classifier on ~80 technical indicators (`ta` library) | ETH-USD and BTC-USD, monthly, 2020 – Feb 2025 (yfinance) | Complete, evaluated in-sample only |
-| `BTC/csvX.ipynb` | LSTM on 7-day sequences of price + daily tweet sentiment (DistilBERT) | BTC-USD daily + Kaggle Bitcoin tweets dataset | Pipeline written, not fully run |
-| `BTC/XLIVE.ipynb` | Same LSTM, fed with live X (Twitter) posts | X API | Stopped: X API access unavailable |
+Notebook: [`BTC/indicatorbasedprediction.ipynb`](BTC/indicatorbasedprediction.ipynb)
 
-### 1. SMA crossover projection
-The notebook computes the 20- and 50-day simple moving averages and labels each day "up" when SMA20 > SMA50. To look forward, it extends both averages linearly using their latest daily slope and simulates prices around them.
+**Setup**
+- **Data:** daily OHLCV from Yahoo Finance (BTC from 2014, ETH from 2017), resampled to monthly and weekly candles. The current, still-incomplete candle is dropped.
+- **Features:** all indicators from `ta.add_all_ta_features`, computed without back-filling so no future values leak into early rows.
+- **Target:** `1` if the next close is higher than the current close, otherwise `0`.
+- **Evaluation:** walk-forward. For each period, the model is trained only on earlier periods and then predicts that period (expanding window; 24 months or 104 weeks of initial training).
+- **Baselines:** *always up*, *persistence* (same direction as the current candle), and a 50% coin flip.
 
-**Finding:** the 60-day forecast is "Down" for every day. That is a property of the method, not a market signal. When both averages are extended along straight lines from a state where SMA20 < SMA50, the crossover can only come from the slopes, so the projection mostly repeats the current trend. Extrapolating indicators is not prediction.
+**Results** (out-of-sample accuracy)
 
-### 2. Random Forest on technical indicators
-- Daily data is resampled to monthly candles (open, high, low, close, volume).
-- Features: every indicator from `ta.add_all_ta_features`, plus SMA/EMA(20), RSI(14), Bollinger Bands and MACD.
-- Target: `1` if next month's close is higher than this month's, otherwise `0`.
-- Model: `RandomForestClassifier`, trained on all months except the latest, which is then predicted.
+| Setup | Test periods | Training accuracy | Random Forest | Always up | Persistence | p-value (RF > 50%) |
+|---|---:|---:|---:|---:|---:|---:|
+| BTC monthly | 120 | 100% | **49.2%** | 56.7% | 55.0% | 0.61 |
+| BTC weekly | 526 | 100% | **46.4%** | 54.6% | 48.5% | 0.96 |
+| ETH monthly | 82 | 100% | **52.4%** | 53.7% | 54.9% | 0.37 |
+| ETH weekly | 362 | 100% | **48.6%** | 51.7% | 52.8% | 0.72 |
 
-**Finding:** training accuracy was **1.00** for both coins. That number is a warning sign, not a result:
-- It is measured on the same data the model was trained on.
-- Since 2020 there are only about 60 monthly samples, against about 80 features. A Random Forest can memorise a dataset that small.
-- The feature importances of the classic indicators (MACD, RSI, SMA, EMA, Bollinger) were each about 1–2%. No single indicator stood out.
+*Data up to October 2026. Results will shift slightly when the notebook is re-run on newer data.*
 
-A meaningful claim needs out-of-sample testing (see *Next steps*).
+**What this shows**
+1. **Training accuracy is meaningless here.** With ~80 features and 100–600 samples, the model memorises the history. An earlier version of this project reported that 100% as its result, which was the key mistake this version corrects.
+2. **On unseen data the model is at coin-flip level** and never beats the simplest baseline. None of the results is statistically better than 50%.
+3. **Technical indicators alone gave no usable signal** for the next monthly or weekly candle. This is consistent with markets already pricing in public price information.
 
-### 3. Adding sentiment (LSTM + DistilBERT)
-The hypothesis behind this part was that price alone lacks the information that moves crypto markets, namely news and crowd sentiment. The pipeline scores tweets with a transformer model, averages the scores per day, merges them with closing prices, and trains a 2-layer LSTM to predict the next day's close.
+## Other experiments
 
-The pipeline is written but not validated. While reviewing it I found several issues that would have to be fixed before any result could be trusted:
-- `distilbert-base-uncased` is a base language model without a sentiment head. A fine-tuned checkpoint such as `distilbert-base-uncased-finetuned-sst-2-english` is needed.
-- The `MinMaxScaler` is fitted on the full dataset before the train/validation split, which leaks future information.
-- The price window (30 days) is very small for an LSTM, and it has to match the date range of the tweet dataset.
-- Live data collection depends on X API access, which I no longer had.
+| Notebook | Approach | Status |
+|---|---|---|
+| `BTC/mlprediction on btc_usd_chart.ipynb` | 20/50-day SMA crossover, projected 60 days ahead (Bitstamp BTC/USD daily CSV) | Complete, but see note |
+| `BTC/csvX.ipynb` | LSTM on 7-day sequences of price + daily tweet sentiment (DistilBERT, Kaggle Bitcoin tweets) | Pipeline written, not validated |
+| `BTC/XLIVE.ipynb` | Same LSTM, fed with live X (Twitter) posts | Archived: X API access unavailable |
+
+**SMA crossover projection.** The notebook extends both moving averages along straight lines from their latest slope, so its 60-day forecast ("Down" every day) mostly repeats the current trend by construction. Extrapolating indicators is not prediction; a backtest against buy-and-hold would be the correct way to evaluate this rule.
+
+**Sentiment (LSTM + DistilBERT).** The hypothesis was that price lacks the information that moves crypto markets: news and crowd sentiment. The pipeline is written but has known issues that must be fixed before any result can be trusted:
+- `distilbert-base-uncased` has no sentiment head; a fine-tuned checkpoint such as `distilbert-base-uncased-finetuned-sst-2-english` is needed.
+- The `MinMaxScaler` is fitted on all data before the train/validation split, which leaks future information.
+- The 30-day price window is too small for an LSTM and must match the date range of the tweet dataset.
 
 ## Conclusions
 
-1. **Price-derived indicators alone showed no demonstrable predictive edge.** This matches the efficient-market view: public price information is largely already reflected in the price.
-2. **High accuracy on training data is meaningless for time series.** It is the most common mistake in amateur trading models, and my first version made it too.
-3. **If a signal exists, it is more likely in external information** (news, sentiment, on-chain data) than in candles. That is why the project moved toward sentiment.
+- Price-derived indicators did not predict the direction of the next monthly or weekly candle better than naive baselines.
+- For time series, only out-of-sample (walk-forward) evaluation is meaningful; in-sample accuracy is misleading.
+- If a signal exists, it is more likely in external information (news, sentiment, on-chain data) than in candles. That is the direction of the sentiment notebooks.
 
 ## Next steps
 
-- Replace the in-sample score with **walk-forward validation** (train on months 1…t, predict t+1, roll forward).
-- Compare against **naive baselines**: "always up" and "same direction as last month". A model is only useful if it beats them.
-- Use daily or weekly data to get enough samples, and reduce the feature set to avoid overfitting.
-- Fix the sentiment pipeline issues listed above and evaluate it the same way.
+- Fix and evaluate the sentiment pipeline with the same walk-forward method and baselines.
+- Backtest the SMA crossover rule against buy-and-hold instead of projecting it.
 
 ## Tech stack
 
-Python · pandas · NumPy · scikit-learn · TensorFlow/Keras · Hugging Face Transformers · `ta` · yfinance · tweepy · matplotlib · Google Colab
+Python · pandas · NumPy · scikit-learn · SciPy · TensorFlow/Keras · Hugging Face Transformers · `ta` · yfinance · tweepy · matplotlib · Jupyter / Google Colab
 
-## Running the notebooks
+## Running
 
 ```bash
-pip install pandas numpy yfinance ta scikit-learn matplotlib tensorflow transformers tweepy joblib
+pip install yfinance ta scikit-learn scipy matplotlib jupyter
+jupyter notebook BTC/indicatorbasedprediction.ipynb
 ```
 
-- `indicatorbasedprediction.ipynb` downloads its data from Yahoo Finance and runs as is.
-- `mlprediction on btc_usd_chart.ipynb` and `csvX.ipynb` were written for Google Colab and read CSV files from Google Drive (a Bitstamp BTC/USD daily export and a Kaggle Bitcoin tweets dataset). Adjust the file paths to run them locally.
-- `XLIVE.ipynb` needs X API credentials.
+The main notebook downloads its own data and runs in about 4 minutes. `mlprediction on btc_usd_chart.ipynb` and `csvX.ipynb` were written for Google Colab and read CSV files from Google Drive; adjust the paths to run them locally (they also need `tensorflow transformers joblib`). `XLIVE.ipynb` needs X API credentials.
 
 ## Disclaimer
 
-This is a learning project, not financial advice. No trading was done based on these models.
+Learning project, not financial advice. No trading was done based on these models.
 
 ## License
 
